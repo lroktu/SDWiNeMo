@@ -1,0 +1,43 @@
+#!/bin/bash
+
+IFACE=`iwconfig 2>&1 | grep IEEE | awk '{print $1}'`
+iw dev $IFACE disconnect
+iw dev $IFACE connect $1
+
+#sta0="00:00:01:00:10:01"
+sta0="2e:5b:a1:52:35:44"
+sta1="02:00:00:00:06:00"
+
+if [ $1 == ssid_0 ]; then
+	# Remove Fluxos
+	ovs-ofctl del-flows ap1 "nw_src=10.0.0.1,nw_dst=10.0.100.1"
+    ovs-ofctl del-flows ap1 "nw_src=10.0.100.1,nw_dst=10.0.0.1"
+    ovs-ofctl del-flows s1 "nw_src=10.0.0.1,nw_dst=10.0.100.1"
+    ovs-ofctl del-flows s1 "nw_src=10.0.100.1,nw_dst=10.0.0.1"
+
+	# Fluxos para o AP0
+	ovs-ofctl add-flow ap0 "idle_timeout=180,priority=33000,nw_src=10.0.100.1,nw_dst=10.0.0.1,in_port=1,actions=output:2"
+	ovs-ofctl add-flow ap0 "idle_timeout=180,priority=33000,nw_src=10.0.0.1,nw_dst=10.0.100.1,in_port=2,actions=output:1"
+
+    # Fluxos para o Switch
+	ovs-ofctl add-flow s1 "idle_timeout=180,priority=33000,nw_src=10.0.100.1,nw_dst=10.0.0.1,in_port=5,actions=output:4"
+    ovs-ofctl add-flow s1 "idle_timeout=180,priority=33000,nw_src=10.0.0.1,nw_dst=10.0.100.1,in_port=4,actions=output:5"
+
+
+elif [ $1 == ssid_1 ]; then
+	# Remove Fluxos
+    ovs-ofctl del-flows ap1 "nw_src=10.0.0.1,nw_dst=10.0.100.1"
+    ovs-ofctl del-flows ap1 "nw_src=10.0.100.1,nw_dst=10.0.0.1"
+    ovs-ofctl del-flows s1 "nw_src=10.0.0.1,nw_dst=10.0.100.1"
+    ovs-ofctl del-flows s1 "nw_src=10.0.100.1,nw_dst=10.0.0.1"
+
+	 # Fluxos para o AP0
+    ovs-ofctl add-flow ap1 "idle_timeout=180,priority=33000,nw_src=10.0.100.1,nw_dst=10.0.0.1,in_port=1,actions=output:2"
+    ovs-ofctl add-flow ap1 "idle_timeout=180,priority=33000,nw_src=10.0.0.1,nw_dst=10.0.100.1,in_port=2,actions=output:1"
+
+    # Fluxos para o Switch
+    ovs-ofctl add-flow s1 "idle_timeout=180,priority=33000,nw_src=10.0.100.1,nw_dst=10.0.0.1,in_port=5,actions=output:1"
+    ovs-ofctl add-flow s1 "idle_timeout=180,priority=33000,nw_src=10.0.0.1,nw_dst=10.0.100.1,in_port=1,actions=output:5"
+
+
+fi

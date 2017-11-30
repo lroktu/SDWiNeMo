@@ -1,0 +1,373 @@
+#!/usr/bin/python
+
+# SDWiNeMO - Software Defined Wireless Network for Moving Objects
+# Over-provisioning and Load-Balancing Mechanism
+#
+
+import operator
+import os
+global hashes, event, countBrv
+import commands
+import time
+
+countBrv = 0
+event = 0
+
+class ap:
+	def __init__(self, poa_name, poa_id):
+		self.cosA_Name = 'CoSA' # CoS Name
+		self.cosA_MRTh = 10.8	# Maximum Reservation Threshold (MRTh)
+		self.cosA_Br = 5.4		# Bandwidth Reserved (Br)
+		self.cosA_Bu = 0		# Bandwidth Used (Bu)
+		self.cosA_CMO = 0		# Connected MOs (CMO)
+		self.cosB_Name = 'CoSB'
+		self.cosB_MRTh = 10.8
+		self.cosB_Br = 2.16
+		self.cosB_Bu = 0
+		self.cosB_CMO = 0
+		self.cosC_MRTh = 10.8
+		self.cosC_Name = 'CoSC'
+		self.cosC_Br = 2.16
+		self.cosC_Bu = 0
+		self.cosC_CMO = 0
+		self.poa_id = poa_id
+		self.poa_name = poa_name
+		self.poa_cos = ['A', 'B', 'C']
+		self.map_ap_port = {1:"ap1", 2:"ap2", 3:"ap3", 4:"ap4", 5:"ap5", 6:"ap6"}
+
+	def createAP(self, poa_name, poa_id): #  Create APs and initialize CoS attributes
+
+		print("OK")
+		self.poa=[]
+		for i in self.poa_cos:
+			self.poa.append([eval('self.cos'+i+'_Name'), eval('self.cos'+i+'_MRTh'), eval('self.cos'+i+'_Br'), eval('self.cos'+i+'_Bu'), 
+				eval('self.cos'+i+'_CMO')])
+		return self.poa
+        
+	def updateAttributes(self, poa, cos_id):
+            
+		self.CoS    = poa[0][cos_id][0]
+		self.MRTh   = poa[0][cos_id][1]
+		self.Brv    = poa[0][cos_id][2]
+		self.Bu     = poa[0][cos_id][3]
+	
+	def checkBav(self, poa, cos_id): # Check Available Bandwidth
+		self.updateAttributes(poa, cos_id)
+		return round((self.Brv - self.Bu),2)
+
+	def checkBov(self, poa, cos_id, cos_Brq):
+		self.updateAttributes(poa, cos_id)
+		return round(((self.Bu / self.MRTh) * (self.MRTh - self.Bu - cos_Brq)),2)
+        
+	def auxiliar(self,hashes):
+		v = []
+		i = 0
+		b = ""
+		while i < 147:
+			b = b + str(hashes[i])
+			if (i == 35) | (i == 72) | (i == 109) | (i == 146):
+				v.append(b)
+				b = ""
+				i = i + 1
+				i = i + 1
+			return v
+
+
+	def destroy_Qos(self, poa_id):
+		global hashes
+		poa_name = self.map_ap_port[poa_id] 
+		hashes_ap = hashes.get(poa_id) #Pega os hashes de determinado ap
+		commands.getoutput("sudo ovs-vsctl clear port "+poa_name+"-eth1 qos")
+		commands.getoutput("sudo ovs-vsctl destroy qos " + hashes_ap[0])
+		commands.getoutput("sudo ovs-vsctl destroy queue " + hashes_ap[1])
+		commands.getoutput("sudo ovs-vsctl destroy queue " + hashes_ap[2])
+		commands.getoutput("sudo ovs-vsctl destroy queue " + hashes_ap[3])
+
+	def Queue_Configuration(self,poa_id, poa):
+		global hashes
+		poa_name = self.map_ap_port[poa_id]
+#		self.destroy_Qos(poa_id)
+		hashes_out = commands.getoutput("sudo ovs-vsctl -- set Port "+poa_name+"-eth1 qos=@newqos"+poa_name+" -- --id=@newqos"+poa_name+" create QoS type=linux-htb other-config:max-rate=54000000 queues=0=@qa,1=@qb,2=@qc -- --id=@qa create Queue other-config:min-rate="+str(float(poa[0][0][3]) * 1000000)+" other-config:max-rate="+str(float(poa[0][0][2]) *1000000)+" -- --id=@qb create Queue other-config:min-rate="+str(float(poa[0][1][3])*1000000)+" other-config:max-rate="+str(float(poa[0][1][2])*1000000)+" -- --id=@qc create Queue other-config:min-rate="+str(float(poa[0][2][3])*1000000)+" other-config:max-rate="+str(float(poa[0][2][2])*1000000))
+		hashes.update({poa_id:self.auxiliar(hashes_out)})
+
+	def add_flows_sw(self, in_port, out_port, priority, ip_src, ip_dst, cos_id):
+		if (ip_dst == "10.0.0.45"):
+			print("COS_ID ++----------------------------> "+str(cos_id))
+			os.system("ovs-ofctl add-flow s0 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(in_port)+",nw_src="+ip_src+",nw_dst="+ip_dst+",actions=enqueue:"+str(out_port)+":45")
+			os.system("ovs-ofctl add-flow s0 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(out_port)+",nw_src="+ip_dst+",nw_dst="+ip_src+",actions=enqueue:"+str(in_port)+":45")
+		else:
+			os.system("ovs-ofctl add-flow s0 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(in_port)+",nw_src="+ip_src+",nw_dst="+ip_dst+",actions=enqueue:"+str(out_port)+":"+str(cos_id))
+			os.system("ovs-ofctl add-flow s0 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(out_port)+",nw_src="+ip_dst+",nw_dst="+ip_src+",actions=enqueue:"+str(in_port)+":"+str(cos_id))
+#			os.system("ovs-ofctl add-flow s0 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(in_port)+",nw_src="+ip_src+",nw_dst="+ip_dst+",actions=output:"+str(out_port))
+#			os.system("ovs-ofctl add-flow s0 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(out_port)+",nw_src="+ip_dst+",nw_dst="+ip_src+",actions=output:"+str(in_port))
+
+		# Fluxos para estimativa de Carga de Sinalizacao no cenario Full
+#		os.system("ovs-ofctl add-flow s11 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(in_port)+",nw_src="+ip_src+",nw_dst=200.200.200.200,actions=output:"+str(out_port))
+#		os.system("ovs-ofctl add-flow s11 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(out_port)+",nw_src="+ip_dst+",nw_dst="+ip_src+",actions=output:"+str(in_port))
+#		os.system("ovs-ofctl add-flow sc2 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(in_port)+",nw_src="+ip_src+",nw_dst="+ip_dst+",actions=output:"+str(out_port))
+#		os.system("ovs-ofctl add-flow sc2 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(out_port)+",nw_src="+ip_dst+",nw_dst="+ip_src+",actions=output:"+str(in_port))
+#		os.system("ovs-ofctl add-flow sc5 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(in_port)+",nw_src="+ip_src+",nw_dst="+ip_dst+",actions=output:"+str(out_port))
+#		os.system("ovs-ofctl add-flow sc5 priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port="+str(out_port)+",nw_src="+ip_dst+",nw_dst="+ip_src+",actions=output:"+str(in_port))
+	
+	def add_flows_ap(self, poa_name, priority, ip_src, ip_dst, cos_id):
+		if (ip_dst == "10.0.10.45"): # N vai cair nessa condicao
+			os.system("ovs-ofctl add-flow "+poa_name+" priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port=2,nw_src="+ip_src+",nw_dst="+ip_dst+",actions=enqueue:1:"+str(cos_id))
+			os.system("ovs-ofctl add-flow "+poa_name+" priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port=1,nw_src="+ip_dst+",nw_dst="+ip_src+",actions=enqueue:2:"+str(cos_id))
+		else:
+			os.system("ovs-ofctl add-flow "+poa_name+" priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port=2,nw_src="+ip_dst+",nw_dst="+ip_src+",actions=output:1")
+			os.system("ovs-ofctl add-flow "+poa_name+" priority="+priority+",dl_type=0x0800,idle_timeout=1800,in_port=1,nw_src="+ip_src+",nw_dst="+ip_dst+",actions=output:2")
+
+	def del_flows(self, poa_name, ip_src, ip_dst):
+		os.system("sudo ovs-ofctl del-flows s0 dl_type=0x0800,nw_src="+ip_src+",nw_dst="+ip_dst)
+		os.system("sudo ovs-ofctl del-flows s0 dl_type=0x0800,nw_src="+ip_dst+",nw_dst="+ip_src)
+		os.system("sudo ovs-ofctl del-flows "+poa_name+" dl_type=0x0800,nw_src="+ip_src+",nw_dst="+ip_dst)
+		os.system("sudo ovs-ofctl del-flows "+poa_name+" dl_type=0x0800,nw_src="+ip_dst+",nw_dst="+ip_src)
+
+		# Fluxos para estimativa de Carga de Sinalizacao no cenario Full
+#		os.system("sudo ovs-ofctl del-flows s11 dl_type=0x0800,nw_src="+ip_src+",nw_dst="+ip_dst)
+#		os.system("sudo ovs-ofctl del-flows s11 dl_type=0x0800,nw_src="+ip_dst+",nw_dst="+ip_src)
+#		os.system("sudo ovs-ofctl del-flows sc2 dl_type=0x0800,nw_src="+ip_src+",nw_dst="+ip_dst)
+#		os.system("sudo ovs-ofctl del-flows sc2 dl_type=0x0800,nw_src="+ip_dst+",nw_dst="+ip_src)
+#		os.system("sudo ovs-ofctl del-flows sc5 dl_type=0x0800,nw_src="+ip_src+",nw_dst="+ip_dst)
+#		os.system("sudo ovs-ofctl del-flows sc5 dl_type=0x0800,nw_src="+ip_dst+",nw_dst="+ip_src)
+
+	def allocate(self, poa, cos_id, cos_Brq, mo_name, poa_id, qtd_aps): 		# Allocates resources in the desired CoS 
+		poa[0][cos_id][3] = round((self.Bu + cos_Brq),2)	# Update Brq in the CoS
+		poa[0][cos_id][4] += 1					# Update MO amount in the CoS
+		poa[0][cos_id].append(mo_name)				# Update PoA CoS list with MO Name           
+		aux = mo_name.split("sta")                              #aux[1] = ip do mo
+		ip = "10.0.0."+aux[1]
+		priority = mo_name.split("sta")
+		sta0_port = 8 
+		sta00_port = 11
+		self.add_flows_sw(sta0_port, poa_id, aux[1], "10.0.100.1", ip, cos_id) #in_port = 5 pois o sta0 encontra-se na porta 5, 192.168.100.1 = ip do sta0, ip = ip do staX
+		self.add_flows_ap(self.map_ap_port[poa_id], aux[1], "10.0.100.1", ip, cos_id)
+#		self.Queue_Configuration(poa_id, poa)
+
+	def deallocate(self, poa, cos_id, cos_Brq, mo_name, poa_id): 	# Deallocate resource in the desired CoS 
+		self.updateAttributes(poa, cos_id)
+                aux = mo_name.split("sta")
+                ip = "10.0.0."+aux[1]
+		new_Bu = round((self.Bu - cos_Brq),2)
+		if ((new_Bu * 1.2) < (10.8 * 0.15)):
+			return False
+		else:
+			poa[0][cos_id][3] = round((self.Bu - cos_Brq),2) 	# Update Bu in the CoS
+			poa[0][cos_id][4] -= 1                            	# Update MO ammount in the CoS
+			poa[0][cos_id].remove(mo_name)                    	# Update PoA CoS list with MO Name
+			if ((self.MRTh) < (poa[0][cos_id][3] * 1.2)):            
+				poa[0][cos_id][2] = self.MRTh
+				self.del_flows(self.map_ap_port[poa_id], "10.0.100.1", ip)
+				return True										
+			else:
+				poa[0][cos_id][2] = round((poa[0][cos_id][3] * 1.2),2)
+				self.del_flows(self.map_ap_port[poa_id], "10.0.100.1", ip)
+				return True
+                        
+
+
+	def readjustBrv(self, poa, cos_id, cos_Brq):
+		global countBrv
+		self.updateAttributes(poa, cos_id)
+		poa[0][cos_id][2] = round(self.Brv + (cos_Brq + (self.checkBov(poa, cos_id, cos_Brq) + (cos_Brq * 0.2))),2)
+		countBrv += 1
+		print("---> REAJUSTES REALIZADOS: "+str(countBrv))
+		return True
+
+	def checkMRThReadjust(self, poa, cos_id, cos_list_MRTh):
+		Brl_MRTh = {}
+		for cosid in cos_list_MRTh:
+			self.Brv = poa[0][cosid][2]
+			self.Bu = poa[0][cosid][3]
+			self.MRTh = poa[0][cosid][1]
+			Bidx = round(((self.Brv - self.Bu) / self.Brv),2)
+			Thidx = round(((self.MRTh - self.Brv) / self.MRTh),2)
+			Brl_MRTh.update({cosid: (((Bidx + Thidx) / 2) * (self.MRTh - self.Brv))})
+		return Brl_MRTh
+
+	def decreaseMRTh(self, poa, cos_list_MRTh, MRTh_increase_list):
+		for cos_id in cos_list_MRTh: 						# Changed cosid to cos_id
+			self.updateAttributes(poa, cos_id)
+			#print("MRTH_INCREASE_LIST: "+str(MRTh_increase_list[cos_id])) 
+			poa[0][cos_id][1] = round(self.MRTh - MRTh_increase_list[cos_id],2) 
+
+	def increaseMRTh(self, poa, cos_id, Brl_MRTh):
+		self.updateAttributes(poa, cos_id)
+		poa[0][cos_id][1] = round(self.MRTh + Brl_MRTh,2)
+
+	def generateTest(self, mocToMove, poa, poac, cos, cosX_Brq, poac_id, cos_id_dst, poa_dict, poa_id):
+                global hashes
+		deallocated = 0
+		moved = 0
+		for mo_candidate in mocToMove:
+			new_Bu = (poa[0][cos][3] - cosX_Brq[cos])
+			if ((new_Bu * 1.2) >= (10.8 * 0.15)):
+				if (self.checkPoAResources2(poac, poac_id, cos_id_dst, cosX_Brq[cos], mo_candidate, poa_dict, cosX_Brq[cos]) == True):
+					#print "*** MOC TO MOVE: "+str(mocToMove)
+#					print "*** VERIFICACOES REALIZADAS COM SUCESSO!!!"
+					if (self.deallocate(poa, cos_id_dst, cosX_Brq[cos], mo_candidate, poa_id) == True):  # Deallocate in the old PoA / Readjusts Brv
+						if (self.checkPoAResources(poac, poac_id, cos_id_dst, cosX_Brq[cos], mo_candidate, poa_dict, cosX_Brq[cos], hashes) == True):
+							ip = mo_candidate[3:]
+#							os.system("sudo echo ssid_"+str(poac_id)+" > ../sdwinemo/files/stations/sta.txt") # TBD: Ajustar para casos onde STA +255
+							os.system("sudo echo 10.0.0."+str(ip)+":"+str(poac_id)+" > ../sdwinemo/files/stations/sta"+str(ip)) # TBD: Ajustar para casos onde STA +255
+
+#							# Begin Time Counter
+#							start = time.time()
+#							diff = 0
+#							while (diff < 2):
+#								now = time.time()
+#								diff = now - start
+#							# End Time Counter
+
+							print("Handover: "+str(mo_candidate)+" --> PoA "+str(poac_id)+" "+str(poa[0][cos_id_dst][0]))
+							moved += 1
+				else:
+#					print "*** VERIFICATION FAILURE!!!"
+					return False
+		return moved
+        def get_key_value(self, num):
+
+            for key, value in self.map_ap_port.iteritems():
+                if num == value:
+                    return key
+
+	def selectMOToHandover(self, poa, poac, ammount, cos_list_MRTh, poa_id, poa_dict, cos_Brq, cosX_Brq):   # TBD -> Identificar MO para mover p/ outro PoA
+		poa_dict_size = len(poa_dict)
+		for poac_id in range(2, poa_dict_size + 1):     # Percorre a lista the PoAs disponiveis
+			for cos in range(2,-1,-1):
+				if (poa[0][cos][0] != 'CoSD'):              # Check CoS A, B and C
+					moc = []                                # List with MO Candidates in the CoS
+					mocToMove = []                          # List with MO Candidates in the CoS
+					mo_len = len(poa[0][cos])                   # Get the ammount of MO in the CoSC
+					count = 0
+					cos_id_src = 0                          # CoSA
+					cos_id_dst = cos                        # CoS Dst (B or C)
+
+					for i in range(5, mo_len):
+						moc.append(poa[0][cos][i])
+					new_Bu = (poa[0][cos][3]) - (count * cosX_Brq[cos])
+					if ((len(moc) * cosX_Brq[cos]) >= ammount) & (((len(moc)-1) * cosX_Brq[cos]) > (10.8 * 0.15)):
+#						print("MOC: "+str(moc))
+#						print ("**INFO: There are MOs with compatible resources in PoA"+str(poa_id)+" "+str(poa[0][cos][0])+"...\n\tChecking MRTh readjustment...")
+						for mo_candidate in moc:
+							if (count < ammount):
+								mocToMove.append(mo_candidate)
+								count += cosX_Brq[cos]
+#								print ("COUNT: "+str(count))
+						poac = poa_dict.get(poac_id)
+						moved = self.generateTest(mocToMove, poa, poac, cos, cosX_Brq, poac_id, cos_id_dst, poa_dict, poa_id) 	# Mudar o nome desta funcao
+						if (moved == len(mocToMove)):
+							return True
+						else:
+#							print("**WARNING: Unable to allocate on AP"+str(poac_id)+"!!! Trying AP"+str(poac_id+1))
+							continue
+				else:
+					pass
+#					print ("**WARNING: Unable to Move Necessary MOs!")
+
+	def calculateRequiredMRTh(self, poa, cos_id, cos_Brq, MRTh_increase):
+		self.updateAttributes(poa, cos_id)
+		BrvToUpdate = round(cos_Brq + (self.checkBov(poa, cos_id, cos_Brq) + (cos_Brq * 0.2)),2)
+		MRTh_readjusted = self.MRTh + MRTh_increase
+		calculated_Bov = round(((self.Bu / MRTh_readjusted) * (MRTh_readjusted - self.Bu - cos_Brq)),2)	
+		BrvToUpdate2 = round(cos_Brq + (calculated_Bov + (cos_Brq * 0.2)),2)
+		#return ((self.Brv + BrvToUpdate) - (self.MRTh + MRTh_increase))
+		return ((self.Brv + BrvToUpdate2) - (MRTh_readjusted))
+
+	def functionMRTh(self, poa, cos_id, cos_list_MRTh, cos_Brq, poa_id, poa_dict, cosX_Brq, mo_name):
+		MRTh_increase_list = self.checkMRThReadjust(poa, cos_id, cos_list_MRTh)
+		MRTh_increase = sum(MRTh_increase_list.values())
+		global ammount
+		ammount = self.calculateRequiredMRTh(poa, cos_id, cos_Brq, MRTh_increase)
+		if (MRTh_increase >= ammount):
+#			print("**INFO: Readjustment Authorized!")
+#			print("MRTh_Increase: "+str(MRTh_increase))
+#			print("AMMOUNT: "+str(ammount))
+			self.decreaseMRTh(poa, cos_list_MRTh, MRTh_increase_list)
+			self.increaseMRTh(poa, cos_id, MRTh_increase)
+			return True
+		else:
+			return False
+
+	def checkPoAResources(self, poa, poa_id, cos_id, cos_Brq, mo_name, poa_dict, cosX_Brq, hash_dict): # Check if Brq+20% is less or equal to Bav in the CoS
+		global hashes
+		global event
+		global countBrv
+		hashes = hash_dict
+		self.updateAttributes(poa, cos_id)
+		cos_list_MRTh = {}				# CoS list to update MRTh
+		if ((cos_Brq * 1.2) <= self.checkBav(poa, cos_id)):
+				self.allocate(poa, cos_id, cos_Brq, mo_name, poa_id, len(poa_dict)) # If is there available bandwidth in the over-reservation, requests allocation
+				event = event +1
+				print("\n####### EVENTO: "+str(event))
+				print(mo_name+" --> AP"+str(poa_id)+" "+str(poa[0][cos_id][0])+"\n")
+				print(poa_dict)
+				
+#				print(poa_dict)
+
+				return True
+		else:
+			self.updateAttributes(poa, cos_id)
+			if (self.checkBov(poa, cos_id, cos_Brq) > 0) & (self.Brv + (cos_Brq + (self.checkBov(poa, cos_id, cos_Brq) + (cos_Brq * 0.2))) <= self.MRTh):
+#				print ("**INFO 1: Unable to allocate "+str(mo_name)+" in PoA"+str(poa_id)+"\n\t Readjusting over-reservation in "+str(self.CoS)+"...")
+				if (self.readjustBrv(poa, cos_id, cos_Brq) == True):
+					return self.checkPoAResources(poa, poa_id, cos_id, cos_Brq, mo_name, poa_dict, cosX_Brq, hash_dict)
+				else:
+#					print "**ALERT 1: UNABLE to readjust over-reservation (Brv)"
+					print(poa_dict)
+			else:
+#				print "**ALERT 2: CHECKING MRTh readjustment..."
+				for x in range(0,3):
+					if (self.CoS != poa[0][x][0]):
+						cos_list_MRTh.update({x: poa[0][x][0]})
+				if (self.functionMRTh(poa, cos_id, cos_list_MRTh, cos_Brq, poa_id, poa_dict, cosX_Brq, mo_name) == True):
+					self.updateAttributes(poa, cos_id)
+					return self.checkPoAResources(poa, poa_id, cos_id, cos_Brq, mo_name, poa_dict, cosX_Brq, hash_dict)
+				else:
+#					print("**ALERT 3: UNABLE TO READJUST...HANDOVER REQUIRED")
+#					print("**INFO: Calculating required bandwidth...")
+					self.updateAttributes(poa, cos_id)
+#					print("REQUIRED: "+str(ammount))
+					if (self.selectMOToHandover(poa, poa_dict, ammount, cos_list_MRTh, poa_id, poa_dict, cos_Brq, cosX_Brq) == True):
+						return self.checkPoAResources(poa, poa_id, cos_id, cos_Brq, mo_name, poa_dict, cosX_Brq, hash_dict)
+					else:
+#						print("**ALERT 3: UNABLE to readjust MRTh of "+str(self.CoS)+" in PoA"+str(poa_id)+"...")
+#						print("**WARNING 1: REJECTING ATTACHMENT OF "+str(mo_name))
+						pass
+				
+				return poa_dict
+
+	def functionMRTh2(self, poa, cos_id, cos_list_MRTh, cos_Brq, poa_id, poa_dict, cosX_Brq, mo_name):  # ESSA FUNCAO PRECISA SER REVISTA
+		MRTh_increase_list = self.checkMRThReadjust(poa, cos_id, cos_list_MRTh)
+		MRTh_increase = sum(MRTh_increase_list.values())
+		ammount = self.calculateRequiredMRTh(poa, cos_id, cos_Brq, MRTh_increase)
+		if (MRTh_increase >= ammount):
+			return (self.functionMRTh(poa, cos_id, cos_list_MRTh, cos_Brq, poa_id, poa_dict, cosX_Brq, mo_name))
+		else:
+			print("RECURSOS ESGOTADOS - TENTANDO HANDOVER")
+			#return self.selectMOToHandover(poa, poa_dict, ammount, cos_list_MRTh, poa_id, poa_dict, cos_Brq, cosX_Brq)
+			return False
+
+	def checkPoAResources2(self, poa, poa_id, cos_id, cos_Brq, mo_name, poa_dict, cosX_Brq):	             
+		self.updateAttributes(poa, cos_id)
+		cos_list_MRTh = {}              # CoS list to update MRTh
+		if ((cos_Brq * 1.2) <= self.checkBav(poa, cos_id)):
+			return True
+		else:
+			self.updateAttributes(poa, cos_id)
+			if (self.checkBov(poa, cos_id, cos_Brq) > 0) & (self.Brv + (cos_Brq + (self.checkBov(poa, cos_id, cos_Brq) + (cos_Brq * 0.2))) <= self.MRTh):
+				if (self.readjustBrv(poa, cos_id, cos_Brq)):
+					return self.checkPoAResources2(poa, poa_id, cos_id, cos_Brq, mo_name, poa_dict, cosX_Brq)
+			else:
+				for x in range(0,3):
+					if (self.CoS != poa[0][x][0]):
+						cos_list_MRTh.update({x: poa[0][x][0]})
+				if (self.functionMRTh2(poa, cos_id, cos_list_MRTh, cos_Brq, poa_id, poa_dict, cosX_Brq, mo_name) == True):
+					self.updateAttributes(poa, cos_id)
+					return self.checkPoAResources2(poa, poa_id, cos_id, cos_Brq, mo_name, poa_dict, cosX_Brq)
+				else:
+					return False
+
+
+
+
